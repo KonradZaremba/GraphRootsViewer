@@ -87,6 +87,20 @@ query ViewerDocument($documentId: ID!, $versionId: ID!) {
 }
 `;
 
+const VERSIONS_QUERY = `
+query ViewerVersions($documentId: ID!, $first: Int) {
+  documents(filter: { documentId: $documentId }, first: $first) {
+    nodes {
+      documentId
+      versionId
+      fileName
+      committed
+      fileLastWriteTimeUtc
+    }
+  }
+}
+`;
+
 export class GraphQlError extends Error {
   constructor(messages) {
     super(messages.join("\n"));
@@ -114,6 +128,10 @@ export async function graphql(url, query, variables) {
 
 export function listDocuments(url) {
   return graphql(url, DOCUMENTS_QUERY, { first: 200 });
+}
+
+export function listVersions(url, documentId) {
+  return graphql(url, VERSIONS_QUERY, { documentId, first: 100 });
 }
 
 export function loadDocument(url, documentId, versionId) {

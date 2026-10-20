@@ -1,5 +1,6 @@
-import { listDocuments, loadDocument } from "./api.js";
-import { GraphCanvas, edgeKey } from "./canvas.js";
+import { listDocuments, listVersions, loadDocument } from "./api.js";
+import { GraphCanvas, edgeKey, nodeKey } from "./canvas.js";
+import { diffGraphs, diffMarkdown, diffStatus, nodeLabel, overlayGraph, wireLabel } from "./diff.js";
 import { GraphView } from "./graph-view.js";
 
 const DEFAULT_API = "/graphql";
@@ -20,6 +21,7 @@ const canvasWrap = document.querySelector(".canvas-wrap");
 const viewHint = document.querySelector("#view-hint");
 const viewCanvasButton = document.querySelector("#view-canvas");
 const viewGraphButton = document.querySelector("#view-graph");
+const compareSelect = document.querySelector("#compare-select");
 
 const VIEW_KEY = "graphroots.viewMode";
 const canvas = new GraphCanvas(document.querySelector("#canvas"));
@@ -28,6 +30,9 @@ const storedEdges = new Map();
 let documents = [];
 let activeKey = null;
 let currentDocument = null;
+let versions = [];
+// { diff, before, after, overlay, status, changes } while a version comparison is drawn.
+let comparison = null;
 let viewMode = localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "canvas";
 
 apiUrlInput.value = localStorage.getItem("graphroots.graphqlUrl") || DEFAULT_API;
@@ -37,7 +42,8 @@ graphView.onSelect = showSelection;
 
 function showSelection(selection) {
   if (!selection) {
-    if (currentDocument) showDocument(currentDocument);
+    if (comparison) showComparison();
+    else if (currentDocument) showDocument(currentDocument);
     return;
   }
   if (selection.type === "edge") {
@@ -65,6 +71,7 @@ nodeFilter.addEventListener("input", () => {
 fitButton.addEventListener("click", () => activeView().fit());
 viewCanvasButton.addEventListener("click", () => setViewMode("canvas"));
 viewGraphButton.addEventListener("click", () => setViewMode("graph"));
+compareSelect.addEventListener("change", () => compareWith(compareSelect.value));
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") activeView().select(null);
 });
@@ -163,28 +170,184 @@ function renderDocumentList() {
 
 async function openDocument(doc) {
   activeKey = docKey(doc);
+  comparison = null;
   renderDocumentList();
   canvasHint.textContent = "Loading graph…";
   canvasHint.classList.remove("is-hidden");
   try {
     const data = await loadDocument(apiUrl(), doc.documentId, doc.versionId);
     currentDocument = data.document;
-    storedEdges.clear();
-    for (const edge of currentDocument.graph.edges) {
-      storedEdges.set(edgeKey(edge), edge);
-    }
-    canvas.setGraph(currentDocument.graph);
-    graphView.setGraph(currentDocument.graph);
-    canvas.setFilter(nodeFilter.value);
-    graphView.setFilter(nodeFilter.value);
-    if (activeView().needsFit) activeView().fit();
+    renderGraph(currentDocument.graph);
     canvasHint.classList.add("is-hidden");
-    graphMeta.textContent = `${currentDocument.stats.nodeCount} nodes · ${currentDocument.stats.portCount} ports · ${currentDocument.stats.edgeCount} edges`;
+    graphMeta.textContent = documentMeta(currentDocument);
     showDocument(currentDocument);
+    await loadVersions(currentDocument);
   } catch (error) {
     clearGraph(error.message);
     showMessage("Properties", error.message);
   }
+}
+
+// Views get a copy: dragging on the canvas writes x/y into the node objects, and the stored graph
+// must stay as loaded so a later comparison does not see the drag as a move.
+function renderGraph(graph, status = new Map()) {
+  const drawn = structuredClone(graph);
+  storedEdges.clear();
+  for (const edge of drawn.edges) {
+    storedEdges.set(edgeKey(edge), edge);
+  }
+  canvas.setGraph(drawn);
+  graphView.setGraph(drawn);
+  canvas.setFilter(nodeFilter.value);
+  graphView.setFilter(nodeFilter.value);
+  for (const svg of [canvas.svg, graphView.svg]) applyDiff(svg, status);
+  canvasWrap.dataset.compare = status.size ? "on" : "off";
+  if (activeView().needsFit) activeView().fit();
+}
+
+function applyDiff(svg, status) {
+  for (const el of svg.querySelectorAll("[data-key]")) {
+    const state = status.get(el.dataset.key);
+    for (const name of ["added", "removed", "changed"]) el.classList.toggle(`diff-${name}`, state === name);
+  }
+}
+
+async function loadVersions(doc) {
+  versions = [];
+  try {
+    const data = await listVersions(apiUrl(), doc.documentId);
+    if (currentDocument !== doc) return;
+    versions = data.documents.nodes
+      .filter((version) => version.versionId !== doc.versionId)
+      .sort((a, b) => (isOlder(a, b) ? 1 : isOlder(b, a) ? -1 : 0));
+  } catch {
+    // Comparison stays unavailable; the document itself is already shown.
+  }
+  const previous = versions.find((version) => isOlder(version, doc));
+  const latest = versions[0] && isOlder(doc, versions[0]) ? versions[0] : null;
+  compareSelect.replaceChildren(
+    new Option(versions.length ? "No comparison" : "No other versions", ""),
+    ...versions.map((version) => {
+      const tag = version === previous ? " · previous" : version === latest ? " · latest" : "";
+      return new Option(`${versionName(version)} · ${formatTime(version.fileLastWriteTimeUtc)}${tag}`, version.versionId);
+    }),
+  );
+  compareSelect.disabled = !versions.length;
+}
+
+async function compareWith(versionId) {
+  const doc = currentDocument;
+  if (!doc) return;
+  if (!versionId) {
+    comparison = null;
+    renderGraph(doc.graph);
+    graphMeta.textContent = documentMeta(doc);
+    showDocument(doc);
+    return;
+  }
+  canvasHint.textContent = "Loading comparison…";
+  canvasHint.classList.remove("is-hidden");
+  try {
+    const other = (await loadDocument(apiUrl(), doc.documentId, versionId)).document;
+    if (currentDocument !== doc) return;
+    const [before, after] = isOlder(other, doc) ? [other, doc] : [doc, other];
+    const diff = diffGraphs(before.graph, after.graph);
+    comparison = {
+      diff,
+      before,
+      after,
+      overlay: overlayGraph(diff, before.graph, after.graph),
+      status: diffStatus(diff),
+      changes: new Map(diff.changed.map((change) => [change.after.nodeId, change])),
+    };
+    renderGraph(comparison.overlay, comparison.status);
+    canvasHint.classList.add("is-hidden");
+    graphMeta.textContent = `+${diff.added.length} −${diff.removed.length} ~${diff.changed.length} · wires +${diff.addedEdges.length} −${diff.removedEdges.length}`;
+    showComparison();
+  } catch (error) {
+    canvasHint.classList.add("is-hidden");
+    showMessage("Comparison", error.message);
+  }
+}
+
+function showComparison() {
+  const { diff, before, after } = comparison;
+  inspectorTitle.textContent = "Comparison";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy as Markdown";
+  copy.addEventListener("click", async () => {
+    const markdown = diffMarkdown(diff, before.graph, after.graph, versionName(before), versionName(after));
+    try {
+      await navigator.clipboard.writeText(markdown);
+      copy.textContent = "Copied";
+    } catch {
+      const pre = document.createElement("pre");
+      pre.className = "markdown";
+      pre.textContent = markdown;
+      inspector.append(pre);
+    }
+  });
+  inspector.replaceChildren(
+    countsRow([
+      ["Added", diff.added.length],
+      ["Removed", diff.removed.length],
+      ["Changed", diff.changed.length],
+      ["+Wires", diff.addedEdges.length],
+      ["−Wires", diff.removedEdges.length],
+    ]),
+    table({ before: `${versionName(before)} · ${formatTime(before.fileLastWriteTimeUtc)}`, after: `${versionName(after)} · ${formatTime(after.fileLastWriteTimeUtc)}` }),
+    copy,
+    ...(diff.hasChanges ? [] : [emptyNote("No structural changes.")]),
+    ...changeSection("Added", "added", diff.added.map((node) => [nodeLabel(node), nodeKey(node)])),
+    ...changeSection("Removed", "removed", diff.removed.map((node) => [nodeLabel(node), nodeKey(node)])),
+    ...changeSection("Changed", "changed", diff.changed.map((change) => [`${nodeLabel(change.after)} — ${change.fields.join("; ")}`, nodeKey(change.after)])),
+    ...changeSection("Added wires", "added", diff.addedEdges.map((edge) => [wireLabel(edge, after.graph), edgeKey(edge)])),
+    ...changeSection("Removed wires", "removed", diff.removedEdges.map((edge) => [wireLabel(edge, before.graph), edgeKey(edge)])),
+    ...(diff.comparesState ? [] : [emptyNote("Settings/state not compared: re-import both versions so nodes carry gh.stateHash.")]),
+  );
+}
+
+function changeSection(title, state, items) {
+  if (!items.length) return [];
+  const list = document.createElement("ul");
+  list.className = "change-list";
+  for (const [label, key] of items) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `diff-${state}`;
+    button.textContent = label;
+    button.addEventListener("click", () => activeView().select(key));
+    item.append(button);
+    list.append(item);
+  }
+  return [heading(`${title} (${items.length})`), list];
+}
+
+function comparisonNote(key, nodeId) {
+  if (!comparison) return [];
+  const change = nodeId ? comparison.changes.get(nodeId) : null;
+  return [
+    heading("Comparison"),
+    table({ status: comparison.status.get(key) ?? "unchanged", ...(change ? { changes: change.fields.join("; ") } : {}) }),
+  ];
+}
+
+function documentMeta(doc) {
+  return `${doc.stats.nodeCount} nodes · ${doc.stats.portCount} ports · ${doc.stats.edgeCount} edges`;
+}
+
+function versionName(doc) {
+  return `${doc.fileName || "Untitled document"} [${doc.versionId.slice(0, 8)}]`;
+}
+
+function isOlder(a, b) {
+  return (a.fileLastWriteTimeUtc ?? "") < (b.fileLastWriteTimeUtc ?? "");
+}
+
+function formatTime(value) {
+  return value ? new Date(value).toLocaleString() : "unknown time";
 }
 
 function showDocument(doc) {
@@ -223,8 +386,9 @@ function showDocument(doc) {
 function showNode(node) {
   inspectorTitle.textContent = "Node";
   const { extensions, ...fields } = node;
-  const ports = (currentDocument?.graph.ports ?? []).filter((port) => port.nodeId === node.nodeId);
+  const ports = (comparison?.overlay.ports ?? currentDocument?.graph.ports ?? []).filter((port) => port.nodeId === node.nodeId);
   inspector.replaceChildren(
+    ...comparisonNote(nodeKey(node), node.nodeId),
     heading("Node"),
     table(fields),
     heading("Ports"),
@@ -242,10 +406,11 @@ function showNode(node) {
 function showEdge(edge) {
   inspectorTitle.textContent = "Edge";
   const { extensions, ...fields } = edge;
-  const ports = currentDocument?.graph.ports ?? [];
+  const ports = comparison?.overlay.ports ?? currentDocument?.graph.ports ?? [];
   const source = ports.find((port) => port.portId === edge.sourcePortId);
   const target = ports.find((port) => port.portId === edge.targetPortId);
   inspector.replaceChildren(
+    ...comparisonNote(edgeKey(edge)),
     heading("Edge"),
     table({
       ...fields,
@@ -279,6 +444,11 @@ function showMessage(title, message) {
 
 function clearGraph(message) {
   currentDocument = null;
+  comparison = null;
+  versions = [];
+  compareSelect.replaceChildren(new Option("No other versions", ""));
+  compareSelect.disabled = true;
+  canvasWrap.dataset.compare = "off";
   storedEdges.clear();
   canvas.clear();
   graphView.clear();
@@ -293,13 +463,17 @@ function setStatus(state, text) {
 }
 
 function statsRow(stats) {
-  const wrap = document.createElement("div");
-  wrap.className = "stats";
-  for (const [label, value] of [
+  return countsRow([
     ["Nodes", stats.nodeCount],
     ["Ports", stats.portCount],
     ["Edges", stats.edgeCount],
-  ]) {
+  ]);
+}
+
+function countsRow(counts) {
+  const wrap = document.createElement("div");
+  wrap.className = "stats";
+  for (const [label, value] of counts) {
     const item = document.createElement("div");
     item.className = "stat";
     item.innerHTML = `<b>${value}</b><span class="muted">${label}</span>`;

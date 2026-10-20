@@ -13,6 +13,9 @@
   --group: #3ecf8e;
   --annotation: #e6c84a;
   --cluster: #c084fc;
+  --diff-added: #3ecf8e;
+  --diff-removed: #f07178;
+  --diff-changed: #ffc857;
   font-family: "Segoe UI", "IBM Plex Sans", sans-serif;
 }
 
@@ -563,4 +566,143 @@ input {
 .stat b {
   display: block;
   font-size: 1.05rem;
+}
+
+/* Version comparison */
+
+.compare-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.compare-field select {
+  max-width: 260px;
+  font: inherit;
+  color: var(--text);
+  background: #10141a;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+}
+
+.compare-field select:disabled {
+  color: var(--muted);
+}
+
+.diff-legend {
+  display: none;
+  position: absolute;
+  z-index: 1;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.canvas-wrap[data-compare="on"] .diff-legend {
+  display: flex;
+}
+
+.swatch.diff-added { background: var(--diff-added); }
+.swatch.diff-removed { background: var(--diff-removed); }
+.swatch.diff-changed { background: var(--diff-changed); }
+
+.change-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.change-list button {
+  width: 100%;
+  text-align: left;
+  font-size: 0.8rem;
+  border-left-width: 3px;
+}
+
+.change-list button.diff-added { border-left-color: var(--diff-added); }
+.change-list button.diff-removed { border-left-color: var(--diff-removed); }
+.change-list button.diff-changed { border-left-color: var(--diff-changed); }
+
+.markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.75rem;
+}
+
+.canvas-wrap[data-compare="on"] .node:not(.diff-added, .diff-removed, .diff-changed),
+.canvas-wrap[data-compare="on"] .g-node:not(.diff-added, .diff-removed, .diff-changed) {
+  opacity: 0.35;
+}
+
+.canvas-wrap[data-compare="on"] .wires path:not(.diff-added, .diff-removed),
+.canvas-wrap[data-compare="on"] .g-edge:not(.diff-added, .diff-removed) {
+  opacity: 0.3;
+}
+
+.node.diff-added rect {
+  stroke: var(--diff-added);
+  stroke-width: 2.4;
+  fill: color-mix(in srgb, var(--diff-added) 16%, #1b222c);
+}
+
+.node.diff-changed rect {
+  stroke: var(--diff-changed);
+  stroke-width: 2.4;
+  fill: color-mix(in srgb, var(--diff-changed) 16%, #1b222c);
+}
+
+.node.diff-removed rect {
+  stroke: var(--diff-removed);
+  stroke-width: 2.4;
+  stroke-dasharray: 6 4;
+  fill: color-mix(in srgb, var(--diff-removed) 12%, #1b222c);
+}
+
+.node.diff-removed text {
+  text-decoration: line-through;
+}
+
+.node circle.diff-added { fill: var(--diff-added); }
+.node circle.diff-removed { fill: var(--diff-removed); }
+
+.wires path.diff-added {
+  stroke: var(--diff-added);
+  stroke-width: 2.4;
+}
+
+.wires path.diff-removed {
+  stroke: var(--diff-removed);
+  stroke-width: 2.4;
+  stroke-dasharray: 7 5;
+}
+
+.g-node.diff-added .ring,
+.g-node.diff-changed .ring,
+.g-node.diff-removed .ring {
+  stroke-width: 3;
+}
+
+.g-node.diff-added .ring { stroke: var(--diff-added); }
+.g-node.diff-changed .ring { stroke: var(--diff-changed); }
+.g-node.diff-removed .ring { stroke: var(--diff-removed); stroke-dasharray: 4 3; }
+
+.g-edge.diff-added .line { stroke: var(--diff-added); }
+.g-edge.diff-removed .line { stroke: var(--diff-removed); stroke-dasharray: 6 4; }
+
+#graph-meta {
+  flex: none;
+  white-space: nowrap;
 }

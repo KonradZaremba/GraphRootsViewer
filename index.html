@@ -45,6 +45,12 @@
           </div>
           <input id="node-filter" type="search" placeholder="Filter nodes…" />
           <button id="fit" type="button">Fit</button>
+          <label class="compare-field">
+            <span>Compare with</span>
+            <select id="compare-select" disabled>
+              <option value="">No other versions</option>
+            </select>
+          </label>
           <span id="view-hint" class="muted">Drag a node to move it</span>
           <span id="graph-meta" class="muted"></span>
         </div>
@@ -56,6 +62,11 @@
           <span><i class="swatch kind-group"></i>Group</span>
           <span><i class="swatch kind-annotation"></i>Annotation</span>
           <span><i class="swatch kind-cluster"></i>Cluster</span>
+        </div>
+        <div class="diff-legend" aria-hidden="true">
+          <span><i class="swatch diff-added"></i>Added</span>
+          <span><i class="swatch diff-removed"></i>Removed</span>
+          <span><i class="swatch diff-changed"></i>Changed</span>
         </div>
         <p id="canvas-hint" class="canvas-hint">Select a document to draw its graph.</p>
       </main>
