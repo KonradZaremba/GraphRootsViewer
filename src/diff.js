@@ -1,6 +1,12 @@
-// Structural comparison of two stored versions of one document, after GrasshopperDigestor's
-// GhVersionDiff. Nodes are matched by nodeId (the GH InstanceGuid, stable across saves) and wires by
-// their port pair. Settings/state changes come from the importer's gh.stateHash extension.
+// Structural comparison of two stored versions of one document. Nodes are matched by nodeId (the GH
+// InstanceGuid, stable across saves) and wires by their port pair. Settings/state changes come from the
+// importer's gh.stateHash extension.
+//
+// Origin: GrasshopperDigestor (GraphHop, https://github.com/graphhop/GrasshopperDigestor). The version
+// comparison ported here, SharedRhino/GhVersionDiff.cs and GhDiffReport.FormatMarkdown, is Konrad
+// Zaremba's modification in his copy of that project (https://github.com/KonradZaremba/GrasshopperDigestor).
+// Changes for GraphRoots: it reads the stored graph instead of a parsed .gh file, diffs wires per port
+// instead of per component, and compares ports, lock state, script source and annotation text as well.
 
 import { edgeKey, nodeKey, portKey } from "./canvas.js";
 
