@@ -1,6 +1,6 @@
-import { listDocuments, listVersions, loadDocument } from "./api.js";
+import { compareDocuments, listDocuments, listVersions, loadDocument } from "./api.js";
 import { GraphCanvas, edgeKey, nodeKey } from "./canvas.js";
-import { diffGraphs, diffMarkdown, diffStatus, nodeLabel, overlayGraph, wireLabel } from "./diff.js";
+import { diffMarkdown, diffStatus, fromComparison, nodeLabel, overlayGraph, wireLabel } from "./diff.js";
 import { GraphView } from "./graph-view.js";
 
 const DEFAULT_API = "/graphql";
@@ -248,10 +248,16 @@ async function compareWith(versionId) {
   canvasHint.textContent = "Loading comparison…";
   canvasHint.classList.remove("is-hidden");
   try {
-    const other = (await loadDocument(apiUrl(), doc.documentId, versionId)).document;
+    // Older/newer is known from the version list, so the comparison runs while the other graph loads.
+    const otherVersion = versions.find((version) => version.versionId === versionId);
+    const [beforeKey, afterKey] = isOlder(otherVersion, doc) ? [otherVersion, doc] : [doc, otherVersion];
+    const [other, compared] = await Promise.all([
+      loadDocument(apiUrl(), doc.documentId, versionId).then((data) => data.document),
+      compareDocuments(apiUrl(), beforeKey, afterKey),
+    ]);
     if (currentDocument !== doc) return;
-    const [before, after] = isOlder(other, doc) ? [other, doc] : [doc, other];
-    const diff = diffGraphs(before.graph, after.graph);
+    const [before, after] = beforeKey === doc ? [doc, other] : [other, doc];
+    const diff = fromComparison(compared.compareDocuments, before.graph, after.graph);
     comparison = {
       diff,
       before,

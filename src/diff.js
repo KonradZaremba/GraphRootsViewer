@@ -1,46 +1,43 @@
-// Structural comparison of two stored versions of one document. Nodes are matched by nodeId (the GH
-// InstanceGuid, stable across saves) and wires by their port pair. Settings/state changes come from the
-// importer's gh.stateHash extension.
+// Presentation of GraphApi's compareDocuments result: resolves its keys against the two loaded graphs,
+// turns the structured changes into labels, and builds the overlay drawing and the Markdown report.
+// The comparison itself runs server-side (GraphDb DocumentComparer).
 //
-// Origin: GrasshopperDigestor (GraphHop, https://github.com/graphhop/GrasshopperDigestor). The version
-// comparison ported here, SharedRhino/GhVersionDiff.cs and GhDiffReport.FormatMarkdown, is Konrad
-// Zaremba's modification in his copy of that project (https://github.com/KonradZaremba/GrasshopperDigestor).
-// Changes for GraphRoots: it reads the stored graph instead of a parsed .gh file, diffs wires per port
-// instead of per component, and compares ports, lock state, script source and annotation text as well.
+// Origin: GrasshopperDigestor (GraphHop, https://github.com/graphhop/GrasshopperDigestor). The labels and
+// report layout follow GhVersionDiff.cs and GhDiffReport.FormatMarkdown in SharedRhino/, Konrad Zaremba's
+// modification in his copy of that project (https://github.com/KonradZaremba/GrasshopperDigestor).
 
 import { edgeKey, nodeKey, portKey } from "./canvas.js";
 
 const STATE_HASH = "gh.stateHash";
 
-export function diffGraphs(before, after) {
+/** The viewer's diff model from a compareDocuments result and the before/after graphs it refers to. */
+export function fromComparison(result, before, after) {
   const beforeNodes = byKey(before.nodes, (node) => node.nodeId);
   const afterNodes = byKey(after.nodes, (node) => node.nodeId);
-  const beforePorts = portIdsByNode(before.ports);
-  const afterPorts = portIdsByNode(after.ports);
+  const resolve = (items, graph, keyFn) => {
+    const index = byKey(graph, keyFn);
+    return items.map((item) => index.get(keyFn(item))).filter(Boolean);
+  };
+  // gh.stateHash is missing on documents imported before it existed; settings are then not compared.
+  const comparesState = [before, after].every((graph) => graph.nodes.some((node) => extension(node, STATE_HASH)));
 
-  const changed = [];
-  for (const node of after.nodes) {
-    const old = beforeNodes.get(node.nodeId);
-    if (!old) continue;
-    const fields = changedFields(old, node, beforePorts.get(node.nodeId), afterPorts.get(node.nodeId));
-    if (fields.length) changed.push({ before: old, after: node, fields });
-  }
-
-  const beforeEdges = byKey(before.edges, edgeKey);
-  const afterEdges = byKey(after.edges, edgeKey);
-  const afterPortIds = new Set(after.ports.map((port) => port.portId));
-  const beforePortIds = new Set(before.ports.map((port) => port.portId));
+  const changed = result.changedNodes
+    .map((change) => {
+      const old = beforeNodes.get(change.after.nodeId);
+      const node = afterNodes.get(change.after.nodeId);
+      return { before: old, after: node, fields: change.changes.map((field) => fieldLabel(field, comparesState, old, node)).filter(Boolean) };
+    })
+    .filter((change) => change.before && change.after && change.fields.length);
 
   const diff = {
-    added: after.nodes.filter((node) => !beforeNodes.has(node.nodeId)),
-    removed: before.nodes.filter((node) => !afterNodes.has(node.nodeId)),
+    added: resolve(result.addedNodes, after.nodes, (node) => node.nodeId),
+    removed: resolve(result.removedNodes, before.nodes, (node) => node.nodeId),
     changed,
-    addedEdges: after.edges.filter((edge) => !beforeEdges.has(edgeKey(edge))),
-    removedEdges: before.edges.filter((edge) => !afterEdges.has(edgeKey(edge))),
-    addedPorts: after.ports.filter((port) => !beforePortIds.has(port.portId)),
-    removedPorts: before.ports.filter((port) => !afterPortIds.has(port.portId)),
-    // gh.stateHash is missing on documents imported before it existed; settings are then not compared.
-    comparesState: [before, after].every((graph) => graph.nodes.some((node) => extension(node, STATE_HASH))),
+    addedPorts: resolve(result.addedPorts, after.ports, (port) => port.portId),
+    removedPorts: resolve(result.removedPorts, before.ports, (port) => port.portId),
+    addedEdges: resolve(result.addedEdges, after.edges, edgeKey),
+    removedEdges: resolve(result.removedEdges, before.edges, edgeKey),
+    comparesState,
   };
   diff.hasChanges = diff.added.length + diff.removed.length + diff.changed.length
     + diff.addedEdges.length + diff.removedEdges.length > 0;
@@ -115,27 +112,32 @@ export function wireLabel(edge, graph) {
   return `${end(edge.sourcePortId, edge.sourceName)} -> ${end(edge.targetPortId, edge.targetName)}`;
 }
 
-function changedFields(a, b, portsA = new Set(), portsB = new Set()) {
-  const fields = [];
-  if (a.typeId !== b.typeId) fields.push(`Type (${a.name ?? a.typeId} -> ${b.name ?? b.typeId})`);
-  if ((a.nickName ?? "") !== (b.nickName ?? "")) fields.push(`NickName ('${a.nickName ?? ""}' -> '${b.nickName ?? ""}')`);
-  if (moved(a, b)) fields.push(`Position ((${round(a.x)},${round(a.y)}) -> (${round(b.x)},${round(b.y)}))`);
-  if (Boolean(a.locked) !== Boolean(b.locked)) fields.push(b.locked ? "Locked" : "Unlocked");
-  if ((a.source ?? "") !== (b.source ?? "")) fields.push("Script source");
-  if ((a.text ?? "") !== (b.text ?? "")) fields.push("Text");
-  const portsAdded = [...portsB].filter((id) => !portsA.has(id)).length;
-  const portsRemoved = [...portsA].filter((id) => !portsB.has(id)).length;
-  if (portsAdded || portsRemoved) fields.push(`Ports (+${portsAdded} -${portsRemoved})`);
-  const hashA = extension(a, STATE_HASH);
-  const hashB = extension(b, STATE_HASH);
-  if (hashA && hashB && hashA !== hashB) fields.push("Settings/state");
-  return fields;
-}
-
-// Same 0.5 canvas-unit tolerance as GhVersionDiff.
-function moved(a, b) {
-  if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) return false;
-  return Math.abs(a.x - b.x) > 0.5 || Math.abs(a.y - b.y) > 0.5;
+// Labels in GhVersionDiff's wording. Returns null for a change the viewer does not show.
+function fieldLabel({ kind, key, before, after }, comparesState, oldNode, newNode) {
+  switch (kind) {
+    case "TYPE":
+      return `Type (${oldNode?.name ?? before} -> ${newNode?.name ?? after})`;
+    case "NICK_NAME":
+      return `NickName ('${before ?? ""}' -> '${after ?? ""}')`;
+    case "POSITION":
+      return `Position ((${round(before?.x)},${round(before?.y)}) -> (${round(after?.x)},${round(after?.y)}))`;
+    case "LOCKED":
+      return after ? "Locked" : "Unlocked";
+    case "SOURCE":
+      return "Script source";
+    case "TEXT":
+      return "Text";
+    case "PORTS": {
+      const added = (after ?? []).filter((id) => !(before ?? []).includes(id)).length;
+      const removed = (before ?? []).filter((id) => !(after ?? []).includes(id)).length;
+      return `Ports (+${added} -${removed})`;
+    }
+    case "EXTENSION":
+      if (key !== STATE_HASH) return `Extension ${key}`;
+      return comparesState && before != null && after != null ? "Settings/state" : null;
+    default:
+      return kind;
+  }
 }
 
 function round(value) {
@@ -144,15 +146,6 @@ function round(value) {
 
 function extension(entity, key) {
   return entity.extensions?.find((item) => item.key === key)?.value ?? null;
-}
-
-function portIdsByNode(ports) {
-  const map = new Map();
-  for (const port of ports) {
-    if (!map.has(port.nodeId)) map.set(port.nodeId, new Set());
-    map.get(port.nodeId).add(port.portId);
-  }
-  return map;
 }
 
 function byKey(items, keyFn) {

@@ -101,6 +101,21 @@ query ViewerVersions($documentId: ID!, $first: Int) {
 }
 `;
 
+// Keys and structured changes only: the viewer already holds both graphs and looks the entities up there.
+const COMPARE_QUERY = `
+query ViewerCompare($before: DocumentKeyInput!, $after: DocumentKeyInput!) {
+  compareDocuments(before: $before, after: $after) {
+    addedNodes { nodeId }
+    removedNodes { nodeId }
+    changedNodes { after { nodeId } changes { kind key before after } }
+    addedPorts { portId }
+    removedPorts { portId }
+    addedEdges { sourcePortId targetPortId }
+    removedEdges { sourcePortId targetPortId }
+  }
+}
+`;
+
 export class GraphQlError extends Error {
   constructor(messages) {
     super(messages.join("\n"));
@@ -132,6 +147,11 @@ export function listDocuments(url) {
 
 export function listVersions(url, documentId) {
   return graphql(url, VERSIONS_QUERY, { documentId, first: 100 });
+}
+
+export function compareDocuments(url, before, after) {
+  const key = (doc) => ({ documentId: doc.documentId, versionId: doc.versionId });
+  return graphql(url, COMPARE_QUERY, { before: key(before), after: key(after) });
 }
 
 export function loadDocument(url, documentId, versionId) {

@@ -1,12 +1,12 @@
 // Integration test for version comparison: imports two versions of a small document through a real
-// GraphApi, then lists, loads and compares them with the viewer's own API client and diff.
+// GraphApi, then lists, loads and compares them through compareDocuments and the viewer's presentation.
 // GRAPHROOTS_TEST_GRAPHQL_URL must point at a GraphApi whose database is disposable (README: Tests).
 
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
-import { graphql, listVersions, loadDocument } from "../src/api.js";
-import { diffGraphs, diffMarkdown, diffStatus, overlayGraph } from "../src/diff.js";
+import { compareDocuments, graphql, listVersions, loadDocument } from "../src/api.js";
+import { diffMarkdown, diffStatus, fromComparison, overlayGraph } from "../src/diff.js";
 
 const url = process.env.GRAPHROOTS_TEST_GRAPHQL_URL;
 const skip = !url && "set GRAPHROOTS_TEST_GRAPHQL_URL to a GraphApi on a disposable database";
@@ -92,6 +92,10 @@ async function importPair(options) {
   return { documentId, beforeId, afterId, before, after };
 }
 
+async function compare(before, after) {
+  return fromComparison((await compareDocuments(url, before, after)).compareDocuments, before.graph, after.graph);
+}
+
 const ids = (items, key) => items.map((item) => item[key]).sort();
 const wires = (edges) => edges.map((edge) => `${edge.sourcePortId}>${edge.targetPortId}`).sort();
 
@@ -102,9 +106,23 @@ test("lists both stored versions of a document", { skip }, async () => {
   assert.deepEqual(ids(versions, "fileLastWriteTimeUtc"), [BEFORE.time, AFTER.time].map((t) => new Date(t).toISOString()));
 });
 
+test("compareDocuments returns structured changes with before and after values", { skip }, async () => {
+  const { before, after } = await importPair();
+  const result = (await compareDocuments(url, before, after)).compareDocuments;
+  const changes = Object.fromEntries(result.changedNodes.map((change) => [change.after.nodeId, change.changes]));
+
+  assert.deepEqual(changes.slider, [{ kind: "EXTENSION", key: "gh.stateHash", before: "slider-0.25", after: "slider-0.75" }]);
+  assert.deepEqual(changes.mover, [{ kind: "POSITION", key: null, before: { x: 0, y: 300 }, after: { x: 50, y: 300 } }]);
+  assert.deepEqual(changes.add, [
+    { kind: "NICK_NAME", key: null, before: "A", after: "Sum" },
+    { kind: "PORTS", key: null, before: ["add.a", "add.b", "add.r"], after: ["add.a", "add.b", "add.c", "add.r"] },
+  ]);
+  assert.equal(changes.jitter, undefined, "a 0.4 move is within the default 0.5 tolerance");
+});
+
 test("reports every kind of change between two imported versions", { skip }, async () => {
   const { before, after } = await importPair();
-  const diff = diffGraphs(before.graph, after.graph);
+  const diff = await compare(before, after);
 
   assert.equal(diff.hasChanges, true);
   assert.equal(diff.comparesState, true);
@@ -123,7 +141,7 @@ test("reports every kind of change between two imported versions", { skip }, asy
 
 test("overlays the removed parts onto the newer version and marks each element", { skip }, async () => {
   const { before, after } = await importPair();
-  const diff = diffGraphs(before.graph, after.graph);
+  const diff = await compare(before, after);
   const overlay = overlayGraph(diff, before.graph, after.graph);
   const status = diffStatus(diff);
 
@@ -143,7 +161,7 @@ test("overlays the removed parts onto the newer version and marks each element",
 
 test("writes the Markdown report in the GhDiffReport layout", { skip }, async () => {
   const { before, after } = await importPair();
-  const markdown = diffMarkdown(diffGraphs(before.graph, after.graph), before.graph, after.graph, "v1", "v2");
+  const markdown = diffMarkdown(await compare(before, after), before.graph, after.graph, "v1", "v2");
 
   for (const line of [
     "# Version diff: v1 -> v2",
@@ -160,7 +178,7 @@ test("writes the Markdown report in the GhDiffReport layout", { skip }, async ()
 
 test("skips the settings check when the versions carry no gh.stateHash", { skip }, async () => {
   const { before, after } = await importPair({ withHashes: false });
-  const diff = diffGraphs(before.graph, after.graph);
+  const diff = await compare(before, after);
 
   assert.equal(diff.comparesState, false);
   assert.ok(!diff.changed.some((change) => change.fields.includes("Settings/state")));
