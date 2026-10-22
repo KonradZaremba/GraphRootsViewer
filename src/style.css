@@ -32,7 +32,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
   color: inherit;
 }
@@ -49,7 +50,8 @@ button:hover {
   border-color: var(--accent);
 }
 
-input {
+input,
+select {
   background: #10141a;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -331,11 +333,11 @@ input {
   cursor: grabbing;
 }
 
-.graph-legend {
+.graph-legend,
+.diff-legend {
   display: none;
   position: absolute;
   z-index: 1;
-  left: 0.85rem;
   bottom: 0.85rem;
   gap: 0.7rem;
   align-items: center;
@@ -345,6 +347,10 @@ input {
   background: color-mix(in srgb, var(--panel) 88%, transparent);
   font-size: 0.75rem;
   color: var(--muted);
+}
+
+.graph-legend {
+  left: 0.85rem;
 }
 
 .canvas-wrap[data-view="graph"] .graph-legend {
@@ -581,11 +587,7 @@ input {
 
 .compare-field select {
   max-width: 260px;
-  font: inherit;
   color: var(--text);
-  background: #10141a;
-  border: 1px solid var(--line);
-  border-radius: 6px;
   padding: 0.35rem 0.45rem;
 }
 
@@ -594,28 +596,19 @@ input {
 }
 
 .diff-legend {
-  display: none;
-  position: absolute;
-  z-index: 1;
   right: 0.85rem;
-  bottom: 0.85rem;
-  gap: 0.7rem;
-  align-items: center;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  font-size: 0.75rem;
-  color: var(--muted);
 }
 
 .canvas-wrap[data-compare="on"] .diff-legend {
   display: flex;
 }
 
-.swatch.diff-added { background: var(--diff-added); }
-.swatch.diff-removed { background: var(--diff-removed); }
-.swatch.diff-changed { background: var(--diff-changed); }
+/* Every element marked by a comparison carries its colour; the rules below only say where it goes. */
+.diff-added { --diff-color: var(--diff-added); }
+.diff-removed { --diff-color: var(--diff-removed); }
+.diff-changed { --diff-color: var(--diff-changed); }
+
+.swatch:is(.diff-added, .diff-removed, .diff-changed) { background: var(--diff-color); }
 
 .change-list {
   list-style: none;
@@ -632,9 +625,7 @@ input {
   border-left-width: 3px;
 }
 
-.change-list button.diff-added { border-left-color: var(--diff-added); }
-.change-list button.diff-removed { border-left-color: var(--diff-removed); }
-.change-list button.diff-changed { border-left-color: var(--diff-changed); }
+.change-list button:is(.diff-added, .diff-removed, .diff-changed) { border-left-color: var(--diff-color); }
 
 .markdown {
   margin: 0;
@@ -652,55 +643,39 @@ input {
   opacity: 0.3;
 }
 
-.node.diff-added rect {
-  stroke: var(--diff-added);
+.node:is(.diff-added, .diff-changed, .diff-removed) rect {
+  stroke: var(--diff-color);
   stroke-width: 2.4;
-  fill: color-mix(in srgb, var(--diff-added) 16%, #1b222c);
-}
-
-.node.diff-changed rect {
-  stroke: var(--diff-changed);
-  stroke-width: 2.4;
-  fill: color-mix(in srgb, var(--diff-changed) 16%, #1b222c);
+  fill: color-mix(in srgb, var(--diff-color) 16%, #1b222c);
 }
 
 .node.diff-removed rect {
-  stroke: var(--diff-removed);
-  stroke-width: 2.4;
   stroke-dasharray: 6 4;
-  fill: color-mix(in srgb, var(--diff-removed) 12%, #1b222c);
+  fill: color-mix(in srgb, var(--diff-color) 12%, #1b222c);
 }
 
 .node.diff-removed text {
   text-decoration: line-through;
 }
 
-.node circle.diff-added { fill: var(--diff-added); }
-.node circle.diff-removed { fill: var(--diff-removed); }
+.node circle:is(.diff-added, .diff-removed) { fill: var(--diff-color); }
 
-.wires path.diff-added {
-  stroke: var(--diff-added);
+.wires path:is(.diff-added, .diff-removed) {
+  stroke: var(--diff-color);
   stroke-width: 2.4;
 }
 
-.wires path.diff-removed {
-  stroke: var(--diff-removed);
-  stroke-width: 2.4;
-  stroke-dasharray: 7 5;
-}
+.wires path.diff-removed { stroke-dasharray: 7 5; }
 
-.g-node.diff-added .ring,
-.g-node.diff-changed .ring,
-.g-node.diff-removed .ring {
+.g-node:is(.diff-added, .diff-changed, .diff-removed) .ring {
+  stroke: var(--diff-color);
   stroke-width: 3;
 }
 
-.g-node.diff-added .ring { stroke: var(--diff-added); }
-.g-node.diff-changed .ring { stroke: var(--diff-changed); }
-.g-node.diff-removed .ring { stroke: var(--diff-removed); stroke-dasharray: 4 3; }
+.g-node.diff-removed .ring { stroke-dasharray: 4 3; }
 
-.g-edge.diff-added .line { stroke: var(--diff-added); }
-.g-edge.diff-removed .line { stroke: var(--diff-removed); stroke-dasharray: 6 4; }
+.g-edge:is(.diff-added, .diff-removed) .line { stroke: var(--diff-color); }
+.g-edge.diff-removed .line { stroke-dasharray: 6 4; }
 
 #graph-meta {
   flex: none;

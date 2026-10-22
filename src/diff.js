@@ -45,7 +45,7 @@ export function fromComparison(result, before, after) {
 }
 
 /** The after graph plus everything the before graph had and the after graph lost, for one overlay drawing. */
-export function overlayGraph(diff, before, after) {
+export function overlayGraph(diff, after) {
   return {
     nodes: [...after.nodes, ...diff.removed],
     ports: [...after.ports, ...diff.removedPorts],
@@ -102,10 +102,23 @@ export function nodeLabel(node) {
   return `${name}${nick} [${node.nodeId.slice(0, 8)}]`;
 }
 
+// Port and node lookups per graph, built once. Graphs are treated as immutable once loaded.
+const indexes = new WeakMap();
+
+function indexOf(graph) {
+  let index = indexes.get(graph);
+  if (!index) {
+    index = { ports: byKey(graph.ports, (port) => port.portId), nodes: byKey(graph.nodes, (node) => node.nodeId) };
+    indexes.set(graph, index);
+  }
+  return index;
+}
+
 export function wireLabel(edge, graph) {
+  const { ports, nodes } = indexOf(graph);
   const end = (portId, fallbackName) => {
-    const port = graph.ports.find((item) => item.portId === portId);
-    const node = port && graph.nodes.find((item) => item.nodeId === port.nodeId);
+    const port = ports.get(portId);
+    const node = port && nodes.get(port.nodeId);
     const portName = port?.name || fallbackName;
     return node ? `${nodeLabel(node)}${portName && port.portId !== node.nodeId ? `.${portName}` : ""}` : portId.slice(0, 8);
   };
@@ -132,6 +145,10 @@ function fieldLabel({ kind, key, before, after }, comparesState, oldNode, newNod
       const removed = (before ?? []).filter((id) => !(after ?? []).includes(id)).length;
       return `Ports (+${added} -${removed})`;
     }
+    case "PORT_NAME":
+      return `Port renamed ('${before ?? ""}' -> '${after ?? ""}')`;
+    case "PORT_DIRECTION":
+      return `Port direction (${before ?? "?"} -> ${after ?? "?"})`;
     case "EXTENSION":
       if (key !== STATE_HASH) return `Extension ${key}`;
       return comparesState && before != null && after != null ? "Settings/state" : null;
@@ -148,6 +165,12 @@ function extension(entity, key) {
   return entity.extensions?.find((item) => item.key === key)?.value ?? null;
 }
 
+// The first item wins on a repeated key, as in GraphDb's DocumentComparer.
 function byKey(items, keyFn) {
-  return new Map(items.map((item) => [keyFn(item), item]));
+  const map = new Map();
+  for (const item of items) {
+    const key = keyFn(item);
+    if (!map.has(key)) map.set(key, item);
+  }
+  return map;
 }

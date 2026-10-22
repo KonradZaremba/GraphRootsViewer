@@ -142,7 +142,7 @@ test("reports every kind of change between two imported versions", { skip }, asy
 test("overlays the removed parts onto the newer version and marks each element", { skip }, async () => {
   const { before, after } = await importPair();
   const diff = await compare(before, after);
-  const overlay = overlayGraph(diff, before.graph, after.graph);
+  const overlay = overlayGraph(diff, after.graph);
   const status = diffStatus(diff);
 
   assert.deepEqual(ids(overlay.nodes, "nodeId"), ["add", "extra", "jitter", "mover", "neg", "panel", "slider"]);

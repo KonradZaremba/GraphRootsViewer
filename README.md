@@ -19,7 +19,7 @@ The page lists stored documents, draws the selected document using canvas `x`/`y
 
 ## Tests
 
-`npm test` runs integration tests for version comparison (`test/compare.test.js`). They import small documents through a real GraphApi, so they need one running on a **disposable** database; without `GRAPHROOTS_TEST_GRAPHQL_URL` they are skipped. From `GraphRootsApi`, start the Compose test database and a second GraphApi on it:
+`npm test` always runs the unit tests for the comparison logic (`test/diff.test.js`: diff model, overlay, Markdown report, labels, version ordering; no server needed). It also runs integration tests for version comparison (`test/compare.test.js`). They import small documents through a real GraphApi, so they need one running on a **disposable** database; without `GRAPHROOTS_TEST_GRAPHQL_URL` they are skipped. From `GraphRootsApi`, start the Compose test database and a second GraphApi on it:
 
 ```bash
 docker compose -f docker/neo4j/compose.yaml up -d --wait neo4j-test

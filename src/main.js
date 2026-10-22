@@ -2,6 +2,7 @@ import { compareDocuments, listDocuments, listVersions, loadDocument } from "./a
 import { GraphCanvas, edgeKey, nodeKey } from "./canvas.js";
 import { diffMarkdown, diffStatus, fromComparison, nodeLabel, overlayGraph, wireLabel } from "./diff.js";
 import { GraphView } from "./graph-view.js";
+import { describeVersions, isOlder } from "./versions.js";
 
 const DEFAULT_API = "/graphql";
 
@@ -31,6 +32,8 @@ let documents = [];
 let activeKey = null;
 let currentDocument = null;
 let versions = [];
+// Counts compareWith calls; openDocument and clearGraph bump it too, so a pending comparison is dropped.
+let compareRequest = 0;
 // { diff, before, after, overlay, status, changes } while a version comparison is drawn.
 let comparison = null;
 let viewMode = localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "canvas";
@@ -171,21 +174,33 @@ function renderDocumentList() {
 async function openDocument(doc) {
   activeKey = docKey(doc);
   comparison = null;
+  compareRequest++;
   renderDocumentList();
   canvasHint.textContent = "Loading graph…";
   canvasHint.classList.remove("is-hidden");
+  // The version list needs only the document id, so it loads alongside the graph. loadVersions reports its
+  // failure; the empty catch only keeps it from being unhandled when the graph load fails first.
+  const versionList = listVersions(apiUrl(), doc.documentId);
+  versionList.catch(() => {});
   try {
     const data = await loadDocument(apiUrl(), doc.documentId, doc.versionId);
+    // A later click may have opened another document while this one loaded.
+    if (activeKey !== docKey(doc)) return;
     currentDocument = data.document;
-    renderGraph(currentDocument.graph);
-    canvasHint.classList.add("is-hidden");
-    graphMeta.textContent = documentMeta(currentDocument);
-    showDocument(currentDocument);
-    await loadVersions(currentDocument);
+    showPlainDocument(currentDocument);
+    await loadVersions(currentDocument, versionList);
   } catch (error) {
+    if (activeKey !== docKey(doc)) return;
     clearGraph(error.message);
     showMessage("Properties", error.message);
   }
+}
+
+function showPlainDocument(doc) {
+  renderGraph(doc.graph);
+  canvasHint.classList.add("is-hidden");
+  graphMeta.textContent = documentMeta(doc);
+  showDocument(doc);
 }
 
 // Views get a copy: dragging on the canvas writes x/y into the node objects, and the stored graph
@@ -200,7 +215,8 @@ function renderGraph(graph, status = new Map()) {
   graphView.setGraph(drawn);
   canvas.setFilter(nodeFilter.value);
   graphView.setFilter(nodeFilter.value);
-  for (const svg of [canvas.svg, graphView.svg]) applyDiff(svg, status);
+  // setGraph draws fresh elements, so only a comparison needs marking.
+  if (status.size) for (const svg of [canvas.svg, graphView.svg]) applyDiff(svg, status);
   canvasWrap.dataset.compare = status.size ? "on" : "off";
   if (activeView().needsFit) activeView().fit();
 }
@@ -212,37 +228,43 @@ function applyDiff(svg, status) {
   }
 }
 
-async function loadVersions(doc) {
+async function loadVersions(doc, versionList) {
   versions = [];
+  let previous = null;
+  let latest = null;
+  let failure = null;
   try {
-    const data = await listVersions(apiUrl(), doc.documentId);
+    const data = await versionList;
     if (currentDocument !== doc) return;
-    versions = data.documents.nodes
-      .filter((version) => version.versionId !== doc.versionId)
-      .sort((a, b) => (isOlder(a, b) ? 1 : isOlder(b, a) ? -1 : 0));
-  } catch {
-    // Comparison stays unavailable; the document itself is already shown.
+    ({ versions, previous, latest } = describeVersions(data.documents.nodes, doc));
+  } catch (error) {
+    if (currentDocument !== doc) return;
+    // The document itself is already shown; only the comparison is unavailable.
+    failure = error.message;
   }
-  const previous = versions.find((version) => isOlder(version, doc));
-  const latest = versions[0] && isOlder(doc, versions[0]) ? versions[0] : null;
+  const first = new Option(failure ? "Could not load versions" : versions.length ? "No comparison" : "No other versions", "");
+  first.title = failure ?? "";
+  compareSelect.title = failure ? `Could not load versions: ${failure}` : "";
   compareSelect.replaceChildren(
-    new Option(versions.length ? "No comparison" : "No other versions", ""),
+    first,
     ...versions.map((version) => {
       const tag = version === previous ? " · previous" : version === latest ? " · latest" : "";
-      return new Option(`${versionName(version)} · ${formatTime(version.fileLastWriteTimeUtc)}${tag}`, version.versionId);
+      return new Option(`${versionLabel(version)}${tag}`, version.versionId);
     }),
   );
   compareSelect.disabled = !versions.length;
+  if (failure) graphMeta.textContent = `${documentMeta(doc)} · versions unavailable: ${failure}`;
 }
 
 async function compareWith(versionId) {
   const doc = currentDocument;
   if (!doc) return;
+  // Only the latest request may touch the page; an older one finishing late is dropped.
+  const request = ++compareRequest;
+  const isStale = () => request !== compareRequest || currentDocument !== doc;
   if (!versionId) {
     comparison = null;
-    renderGraph(doc.graph);
-    graphMeta.textContent = documentMeta(doc);
-    showDocument(doc);
+    showPlainDocument(doc);
     return;
   }
   canvasHint.textContent = "Loading comparison…";
@@ -250,19 +272,20 @@ async function compareWith(versionId) {
   try {
     // Older/newer is known from the version list, so the comparison runs while the other graph loads.
     const otherVersion = versions.find((version) => version.versionId === versionId);
-    const [beforeKey, afterKey] = isOlder(otherVersion, doc) ? [otherVersion, doc] : [doc, otherVersion];
+    const otherIsBefore = isOlder(otherVersion, doc);
+    const [beforeKey, afterKey] = otherIsBefore ? [otherVersion, doc] : [doc, otherVersion];
     const [other, compared] = await Promise.all([
       loadDocument(apiUrl(), doc.documentId, versionId).then((data) => data.document),
       compareDocuments(apiUrl(), beforeKey, afterKey),
     ]);
-    if (currentDocument !== doc) return;
-    const [before, after] = beforeKey === doc ? [doc, other] : [other, doc];
+    if (isStale()) return;
+    const [before, after] = otherIsBefore ? [other, doc] : [doc, other];
     const diff = fromComparison(compared.compareDocuments, before.graph, after.graph);
     comparison = {
       diff,
       before,
       after,
-      overlay: overlayGraph(diff, before.graph, after.graph),
+      overlay: overlayGraph(diff, after.graph),
       status: diffStatus(diff),
       changes: new Map(diff.changed.map((change) => [change.after.nodeId, change])),
     };
@@ -271,6 +294,7 @@ async function compareWith(versionId) {
     graphMeta.textContent = `+${diff.added.length} −${diff.removed.length} ~${diff.changed.length} · wires +${diff.addedEdges.length} −${diff.removedEdges.length}`;
     showComparison();
   } catch (error) {
+    if (isStale()) return;
     canvasHint.classList.add("is-hidden");
     showMessage("Comparison", error.message);
   }
@@ -302,7 +326,7 @@ function showComparison() {
       ["+Wires", diff.addedEdges.length],
       ["−Wires", diff.removedEdges.length],
     ]),
-    table({ before: `${versionName(before)} · ${formatTime(before.fileLastWriteTimeUtc)}`, after: `${versionName(after)} · ${formatTime(after.fileLastWriteTimeUtc)}` }),
+    table({ before: versionLabel(before), after: versionLabel(after) }),
     copy,
     ...(diff.hasChanges ? [] : [emptyNote("No structural changes.")]),
     ...changeSection("Added", "added", diff.added.map((node) => [nodeLabel(node), nodeKey(node)])),
@@ -348,8 +372,8 @@ function versionName(doc) {
   return `${doc.fileName || "Untitled document"} [${doc.versionId.slice(0, 8)}]`;
 }
 
-function isOlder(a, b) {
-  return (a.fileLastWriteTimeUtc ?? "") < (b.fileLastWriteTimeUtc ?? "");
+function versionLabel(doc) {
+  return `${versionName(doc)} · ${formatTime(doc.fileLastWriteTimeUtc)}`;
 }
 
 function formatTime(value) {
@@ -451,6 +475,7 @@ function showMessage(title, message) {
 function clearGraph(message) {
   currentDocument = null;
   comparison = null;
+  compareRequest++;
   versions = [];
   compareSelect.replaceChildren(new Option("No other versions", ""));
   compareSelect.disabled = true;

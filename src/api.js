@@ -88,15 +88,17 @@ query ViewerDocument($documentId: ID!, $versionId: ID!) {
 `;
 
 const VERSIONS_QUERY = `
-query ViewerVersions($documentId: ID!, $first: Int) {
-  documents(filter: { documentId: $documentId }, first: $first) {
+query ViewerVersions($documentId: ID!, $first: Int, $after: String) {
+  documents(filter: { documentId: $documentId }, first: $first, after: $after) {
     nodes {
       documentId
       versionId
       fileName
       committed
+      fileCreationTimeUtc
       fileLastWriteTimeUtc
     }
+    pageInfo { hasNextPage endCursor }
   }
 }
 `;
@@ -145,8 +147,17 @@ export function listDocuments(url) {
   return graphql(url, DOCUMENTS_QUERY, { first: 200 });
 }
 
-export function listVersions(url, documentId) {
-  return graphql(url, VERSIONS_QUERY, { documentId, first: 100 });
+/** Every stored version of the document, following the connection's pages. Same shape as one page: `{ documents: { nodes } }`. */
+export async function listVersions(url, documentId) {
+  const nodes = [];
+  let after = null;
+  do {
+    const { documents } = await graphql(url, VERSIONS_QUERY, { documentId, first: 100, after });
+    nodes.push(...documents.nodes);
+    const next = documents.pageInfo?.hasNextPage ? documents.pageInfo.endCursor : null;
+    after = next && next !== after ? next : null;
+  } while (after);
+  return { documents: { nodes } };
 }
 
 export function compareDocuments(url, before, after) {
